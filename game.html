@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Eco Runner</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+body {
+  margin:0;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  background:#1e293b;
+  height:100vh;
+  font-family:sans-serif;
+  color:#fff;
+}
+#wrap {
+  position:relative;
+  width:900px;
+  max-width:96%;
+}
+canvas {
+  width:100%;
+  height:auto;
+  background:#87CEEB;
+  border:4px solid #0f172a;
+  display:block;
+}
+#hud {
+  position:absolute;
+  top:10px;
+  left:10px;
+  background:rgba(255,255,255,0.9);
+  color:#0f172a;
+  padding:6px 10px;
+  border-radius:6px;
+  font-weight:600;
+}
+#gameOverOverlay {
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,0.5);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  font-size:22px;
+  visibility:hidden;
+}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="900" height="320"></canvas>
+  <div id="hud">Seeds: <span id="seeds">0</span> | Trees: <span id="trees">0</span> | Score: <span id="score">0</span></div>
+  <div id="gameOverOverlay">
+    <div>GAME OVER</div>
+    <small>Press R to Restart</small>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const groundY = H - 50; // y coordinate of ground
+
+  const hudSeeds = document.getElementById("seeds");
+  const hudTrees = document.getElementById("trees");
+  const hudScore = document.getElementById("score");
+  const overlay = document.getElementById("gameOverOverlay");
+
+  // Load images
+  const bgImg = new Image(); bgImg.src = 'assets/bg.png';
+  const playerImg = new Image(); playerImg.src = 'assets/dino.png';
+  const treeImg = new Image(); treeImg.src = 'assets/tree.png';
+  const trashImg = new Image(); trashImg.src = 'assets/trash.png';
+  const seedImg = new Image(); seedImg.src = 'assets/seed.png';
+
+  const SIZE = { player:80, trash:[40,50], seed:[20,20], tree:[50,80] };
+  let running = true, score=0, seeds=0, trees=0;
+  let speed = 5, gravity = 0.7;
+
+  const player = {
+    x:80, 
+    y:groundY - SIZE.player, 
+    w:SIZE.player, 
+    h:SIZE.player,
+    vy:0, 
+    grounded:true,
+    animFrame: 0,
+    animTimer: 0,
+    animSpeed: 8 // frames between animation changes
+  };
+
+  let obstacles=[], items=[], planted=[];
+
+  function spawnObstacle(){
+    obstacles.push({
+      x:W + 20,
+      y: groundY - SIZE.trash[1], // Position on ground
+      w: SIZE.trash[0],
+      h: SIZE.trash[1]
+    });
+  }
+
+  function spawnSeedTrail(){
+    const count = 3 + Math.floor(Math.random()*3);
+    const baseY = groundY - SIZE.seed[1] - 20; // Hover above ground
+    for(let i=0;i<count;i++){
+      items.push({
+        x: W + 20 + i*35,
+        y: baseY - Math.random()*20,
+        w: SIZE.seed[0],
+        h: SIZE.seed[1]
+      });
+    }
+  }
+
+  function reset(){
+    running=true; score=0; seeds=0; trees=0; speed=5;
+    obstacles=[]; items=[]; planted=[];
+    player.y = groundY - SIZE.player; 
+    player.vy = 0; 
+    player.grounded=true;
+    player.animFrame = 0;
+    player.animTimer = 0;
+    overlay.style.visibility="hidden";
+  }
+
+  document.addEventListener("keydown", e => {
+    if((e.code==="Space"||e.code==="ArrowUp") && running && player.grounded){
+      player.vy=-12; // Jump strength
+      player.grounded=false;
+    }
+    if(e.code==="KeyR" && !running) reset();
+  });
+
+  let lastSpawn=0, lastSeed=0;
+
+  function update(){
+    if(!running) return;
+
+    // Player animation (only when grounded)
+    if(player.grounded) {
+      player.animTimer++;
+      if(player.animTimer >= player.animSpeed) {
+        player.animFrame = (player.animFrame + 1) % 4; // 4 frame running cycle
+        player.animTimer = 0;
+      }
+    }
+
+    // Player physics
+    player.vy += gravity;
+    player.y += player.vy;
+    if(player.y >= groundY - player.h){
+      player.y = groundY - player.h;
+      player.vy = 0;
+      player.grounded = true;
+    }
+
+    // Move obstacles, items, trees
+    obstacles.forEach(o => o.x -= speed);
+    items.forEach(s => s.x -= speed);
+    planted.forEach(t => t.x -= speed*0.5);
+
+    // Improved collision with trash - much more forgiving
+    for(let o of obstacles){
+      const paddingX = 20; // Larger padding for more forgiving collision
+      const paddingY = 15;
+      if(
+        player.x + player.w - paddingX > o.x + paddingX &&
+        player.x + paddingX < o.x + o.w - paddingX &&
+        player.y + player.h - paddingY > o.y + paddingY &&
+        player.y + paddingY < o.y + o.h - paddingY
+      ){
+        running=false;
+        overlay.style.visibility="visible";
+        break;
+      }
+    }
+
+    // Collect seeds - more generous collision
+    for(let i=items.length-1;i>=0;i--){
+      let s = items[i];
+      const seedPadding = 15;
+      if(player.x + player.w - seedPadding > s.x &&
+         player.x + seedPadding < s.x + s.w &&
+         player.y + player.h - seedPadding > s.y &&
+         player.y + seedPadding < s.y + s.h){
+        items.splice(i,1);
+        seeds++; score += 10;
+        if(seeds % 10 === 0){
+          trees++;
+          planted.push({
+            x:W, 
+            y:groundY - SIZE.tree[1], // Position tree on ground
+            w:SIZE.tree[0], 
+            h:SIZE.tree[1]
+          });
+        }
+      }
+    }
+
+    // Remove off-screen objects
+    obstacles = obstacles.filter(o => o.x + o.w > 0);
+    items = items.filter(s => s.x + s.w > 0);
+    planted = planted.filter(t => t.x + t.w > 0);
+
+    // Spawn obstacles/seeds
+    const now = Date.now();
+    if(now - lastSpawn > 1800){ spawnObstacle(); lastSpawn = now; }
+    if(now - lastSeed > 2200){ spawnSeedTrail(); lastSeed = now; }
+
+    score++;
+    speed = 5 + Math.floor(score/500);
+
+    hudSeeds.textContent = seeds;
+    hudTrees.textContent = trees;
+    hudScore.textContent = score;
+  }
+
+  function draw(){
+    // Clear canvas
+    ctx.clearRect(0, 0, W, H);
+    
+    // Sky background
+    const gradient = ctx.createLinearGradient(0, 0, 0, groundY);
+    gradient.addColorStop(0, '#87CEEB');
+    gradient.addColorStop(1, '#98E4FF');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, groundY);
+
+    // Ground
+    ctx.fillStyle="#4A5D23"; 
+    ctx.fillRect(0, groundY, W, H - groundY);
+    
+    // Ground line
+    ctx.fillStyle="#2F3A14";
+    ctx.fillRect(0, groundY, W, 3);
+
+    // Trees (draw first so they appear behind)
+    planted.forEach(t => {
+      if(treeImg.complete) {
+        ctx.drawImage(treeImg, t.x, t.y, t.w, t.h);
+      } else {
+        // Tree trunk
+        ctx.fillStyle="#8B4513";
+        ctx.fillRect(t.x + t.w/3, t.y + t.h/2, t.w/3, t.h/2);
+        // Tree leaves
+        ctx.fillStyle="#228B22";
+        ctx.beginPath();
+        ctx.arc(t.x + t.w/2, t.y + t.h/3, t.w/2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    // Seeds (hovering items)
+    items.forEach(s => {
+      if(seedImg.complete) {
+        ctx.drawImage(seedImg, s.x, s.y, s.w, s.h);
+      } else {
+        ctx.fillStyle="#FFD700";
+        ctx.beginPath();
+        ctx.arc(s.x + s.w/2, s.y + s.h/2, s.w/2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+
+    // Obstacles (trash on ground)
+    obstacles.forEach(o => {
+      if(trashImg.complete) {
+        ctx.drawImage(trashImg, o.x, o.y, o.w, o.h);
+      } else {
+        ctx.fillStyle="#8B4513";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        // Add some trash details
+        ctx.fillStyle="#654321";
+        ctx.fillRect(o.x + 5, o.y + 5, o.w - 10, 5);
+        ctx.fillRect(o.x + 5, o.y + 15, o.w - 10, 5);
+      }
+    });
+
+    // Player with running animation
+    if(playerImg.complete) {
+      ctx.drawImage(playerImg, player.x, player.y, player.w, player.h);
+    } else {
+      // Animated running character
+      drawRunningCharacter(player.x, player.y, player.w, player.h, player.animFrame, player.grounded);
+    }
+
+    // Debug collision boxes (set to true to see hitboxes)
+    if(false) { // Set to false to hide collision boxes
+      ctx.strokeStyle = "red";
+      ctx.lineWidth = 2;
+      // Player actual hitbox
+      const pPadX = 20, pPadY = 15;
+      ctx.strokeRect(player.x + pPadX, player.y + pPadY, player.w - pPadX*2, player.h - pPadY*2);
+      // Obstacle hitboxes
+      obstacles.forEach(o => {
+        const oPadX = 20, oPadY = 15;
+        ctx.strokeRect(o.x + oPadX, o.y + oPadY, o.w - oPadX*2, o.h - oPadY*2);
+      });
+    }
+  }
+
+  function drawRunningCharacter(x, y, w, h, frame, grounded) {
+    const centerX = x + w/2;
+    const centerY = y + h/2;
+    
+    // Body
+    ctx.fillStyle = "#32CD32";
+    ctx.fillRect(x + w*0.2, y + h*0.2, w*0.6, h*0.5);
+    
+    // Head
+    ctx.fillStyle = "#32CD32";
+    ctx.beginPath();
+    ctx.arc(centerX, y + h*0.15, w*0.15, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eye
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(centerX + w*0.05, y + h*0.12, w*0.03, 0, Math.PI * 2);
+    ctx.fill();
+    
+    if(grounded) {
+      // Running legs animation
+      const legOffset = Math.sin(frame * Math.PI / 2) * w*0.1;
+      
+      // Left leg
+      ctx.fillStyle = "#228B22";
+      ctx.fillRect(x + w*0.3 + legOffset, y + h*0.7, w*0.1, h*0.25);
+      
+      // Right leg  
+      ctx.fillStyle = "#228B22";
+      ctx.fillRect(x + w*0.6 - legOffset, y + h*0.7, w*0.1, h*0.25);
+      
+      // Running arms animation
+      const armOffset = Math.sin((frame + 2) * Math.PI / 2) * w*0.08;
+      
+      // Left arm
+      ctx.fillStyle = "#32CD32";
+      ctx.fillRect(x + w*0.1 + armOffset, y + h*0.3, w*0.08, h*0.3);
+      
+      // Right arm
+      ctx.fillStyle = "#32CD32";
+      ctx.fillRect(x + w*0.82 - armOffset, y + h*0.3, w*0.08, h*0.3);
+    } else {
+      // Jumping pose - legs together, arms spread
+      ctx.fillStyle = "#228B22";
+      ctx.fillRect(x + w*0.4, y + h*0.7, w*0.2, h*0.25); // Legs together
+      
+      ctx.fillStyle = "#32CD32";
+      ctx.fillRect(x + w*0.05, y + h*0.25, w*0.08, h*0.3); // Left arm up
+      ctx.fillRect(x + w*0.87, y + h*0.25, w*0.08, h*0.3); // Right arm up
+    }
+  }
+
+  function loop(){
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+})();
+</script>
+</body>
+</html>
